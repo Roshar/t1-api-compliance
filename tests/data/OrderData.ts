@@ -38,7 +38,9 @@ export abstract class OrderData {
   protected abstract getSubnet(): any;
   protected abstract getFlavor(): any;
   protected abstract getBootVolume(): any;
-  protected abstract getParameters(): any;
+  protected getParameters(): any {
+    return undefined;
+  }
   
   // Для формирования тела зказа 
   abstract buildOrderBody(): any;

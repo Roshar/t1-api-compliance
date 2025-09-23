@@ -1,8 +1,12 @@
 import { OrderData } from './OrderData';
 
 export class MySQLOrderData extends OrderData {
+  protected getParameters() {
+    throw new Error('Method not implemented.');
+  }
   protected productType = 'mysql';
-
+  
+  
   buildOrderBody() {
     return {
       order: {
@@ -19,9 +23,6 @@ export class MySQLOrderData extends OrderData {
           flavor: this.getFlavor(),
           boot_volume: this.getBootVolume(),
           auto_backup: { enabled: false },
-          parameters: this.getParameters(),
-          aof: { fsync: 'everysec', enabled: true },
-          rdb: { save: '300 10', enabled: true, compression: true },
           security_groups: this.getSecurityGroups(),
           security_group: true,
           service_type: 'Standalone',
@@ -66,11 +67,11 @@ export class MySQLOrderData extends OrderData {
 
   protected getFlavor() {
     return {
-      id: 'b4e6d4a4-e6bb-4769-ab13-5423f51eb4f9',
-      name: 'b5.2xlarge.4',
+      id: '68b0a091-c1ae-40c7-b858-b69080452427',
+      name: 'b5.large.2',
       description: null,
-      ram: 28672,
-      vcpus: 8,
+      ram: 4096,
+      vcpus: 2,
       gpus: 0,
       extra_specs: {
         family: 'general-purpose',
@@ -82,7 +83,7 @@ export class MySQLOrderData extends OrderData {
 
   protected getBootVolume() {
     return {
-      size: 25,
+      size: 10,
       volume_type: {
         id: '2207b7c5-5848-477b-9745-8cb422af1705',
         name: 'average',
@@ -95,12 +96,4 @@ export class MySQLOrderData extends OrderData {
     };
   }
 
-  protected getParameters() {
-    return {
-      timeout: 300,
-      'tcp-backlog': 511,
-      'tcp-keepalive': 300,
-      'maxmemory-policy': 'noeviction',
-    };
-  }
 }
