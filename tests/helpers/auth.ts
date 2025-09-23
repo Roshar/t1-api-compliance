@@ -1,4 +1,3 @@
-// tests/helpers/auth.ts
 import { request } from '@playwright/test';
 
 export async function getAuthToken(): Promise<string> {

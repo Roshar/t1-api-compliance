@@ -20,11 +20,11 @@ test.afterAll(async () => {
   await api?.dispose();
 });
 
-// Тест для Redis
+// Заказываем редис (1 ВМ, 7.2.5 версии, с ТЛС)
 test('Создание Redis кластера', async () => {
   const orderData = OrderDataFactory.createOrderData('redis');
   const body = orderData.buildOrderBody();
-
+  
   const url = `/redis-manager/api/v1/projects/${process.env.PROJECT_ID}/order-service/orders`;
 
   console.log('📤 Creating Redis cluster:', body.order.attrs.cluster_name);
@@ -34,30 +34,30 @@ test('Создание Redis кластера', async () => {
 
   if (status !== 200) {
     const errorText = await res.text();
-    console.error('❌ Redis order failed:', errorText);
+    console.error('Redis order failed:', errorText);
     expect(status).toBe(200);
   } else {
-    console.log('✅ Redis order created successfully');
+    console.log('Redis order created successfully');
   }
 });
 
-// Тест для MySQL
+// Заказываем Мускуль (1 ВМ, 8.4.4 версии, с ТЛС)
 test('Создание MySQL кластера', async () => {
   const orderData = OrderDataFactory.createOrderData('mysql');
   const body = orderData.buildOrderBody();
+  
+  const url = `/mysql-manager/api/v1/projects/${process.env.PROJECT_ID}/order-service/orders`;
 
-  const url = `/redis-manager/api/v1/projects/${process.env.PROJECT_ID}/order-service/orders`;
-
-  console.log('📤 Creating MySQL cluster:', body.order.attrs.cluster_name);
+  console.log('Creating mysql cluster:', body.order.attrs.cluster_name);
 
   const res = await api.post(url, { data: body });
   const status = res.status();
 
   if (status !== 200) {
     const errorText = await res.text();
-    console.error('❌ MySQL order failed:', errorText);
+    console.error('mysql order failed:', errorText);
     expect(status).toBe(200);
   } else {
-    console.log('✅ MySQL order created successfully');
+    console.log('mysql order created successfully');
   }
 });
