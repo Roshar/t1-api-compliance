@@ -1,20 +1,32 @@
-import { RedisOrderData } from './RedisOrderData';
-import { MySQLOrderData } from './MySQLOrderData';
+import { RedisStandaloneData } from './Redis/RedisStandaloneData';
+import { RedisSentinelData } from './Redis/RedisSentinelData';
+import { MySQLStandaloneData } from './MySQL/MySQLStandaloneData';
 import { OrderData } from './OrderData';
 
-export type ProductType = 'redis' | 'mysql' | 'opensearch';
+export type ProductType = 
+  | 'redis-standalone' | 'redis-sentinel' | 'redis-cluster'
+  | 'mysql-standalone' | 'mysql-replica' | 'mysql-cluster'
+  | 'opensearch-single' | 'opensearch-cluster' | 'opensearch-dedicated';
+
+  //TODO необходимо реализовать
+  //OpenSearchSingleData
+  //OpenSearchClusterWithoutDashboardData
+  //OpenSearchClusterWithDashboardData
 
 export class OrderDataFactory {
   static createOrderData(productType: ProductType): OrderData {
     switch (productType) {
-      case 'redis':
-        return new RedisOrderData();
-      case 'mysql':
-        return new MySQLOrderData();
+      // Redis
+      case 'redis-standalone':
+        return new RedisStandaloneData();
+      case 'redis-sentinel':
+        return new RedisSentinelData();
+      // MySQL
+      case 'mysql-standalone':
+        return new MySQLStandaloneData();  
+      // Можно добавить остальные продукты по мере необходимости
       default:
         throw new Error(`Unsupported product type: ${productType}`);
     }
   }
 }
-
-

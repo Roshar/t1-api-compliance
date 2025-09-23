@@ -1,6 +1,6 @@
-import { OrderData } from './OrderData';
+import { OrderData } from '../OrderData';
 
-export class RedisOrderData extends OrderData {
+export class RedisStandaloneData extends OrderData {
   protected productType = 'redis';
 
   buildOrderBody() {

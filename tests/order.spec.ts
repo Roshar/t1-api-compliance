@@ -21,43 +21,67 @@ test.afterAll(async () => {
 });
 
 // Заказываем редис (1 ВМ, 7.2.5 версии, с ТЛС)
-test('Создание Redis кластера', async () => {
-  const orderData = OrderDataFactory.createOrderData('redis');
+test('Создание Redis Standalone', async () => {
+  const orderData = OrderDataFactory.createOrderData('redis-standalone');
   const body = orderData.buildOrderBody();
   
   const url = `/redis-manager/api/v1/projects/${process.env.PROJECT_ID}/order-service/orders`;
 
-  console.log('📤 Creating Redis cluster:', body.order.attrs.cluster_name);
+  // оставить пока для отладки
+  //console.log('Создание заказа:', body.order.attrs.cluster_name);
 
   const res = await api.post(url, { data: body });
   const status = res.status();
 
   if (status !== 200) {
     const errorText = await res.text();
-    console.error('Redis order failed:', errorText);
+    console.error('Redis Sentinel заказ упал:', errorText);
     expect(status).toBe(200);
   } else {
-    console.log('Redis order created successfully');
+    console.log('Redis standalone успешно создан');
+  }
+});
+
+// Заказываем редис Сентинел (3 ВМ, 7.2.5 версии, с ТЛС)
+test('Создание Redis Sentinel', async () => {
+  const orderData = OrderDataFactory.createOrderData('redis-sentinel');
+  const body = orderData.buildOrderBody();
+  
+  const url = `/redis-manager/api/v1/projects/${process.env.PROJECT_ID}/order-service/orders`;
+
+  // оставить пока для отладки
+  //console.log('Создание заказа:', body.order.attrs.cluster_name);
+
+  const res = await api.post(url, { data: body });
+  const status = res.status();
+
+  if (status !== 200) {
+    const errorText = await res.text();
+    console.error('Redis Sentinelзаказ упал:', errorText);
+    expect(status).toBe(200);
+  } else {
+    console.log('Redis Sentinel успешно создан');
   }
 });
 
 // Заказываем Мускуль (1 ВМ, 8.4.4 версии, с ТЛС)
 test('Создание MySQL кластера', async () => {
-  const orderData = OrderDataFactory.createOrderData('mysql');
+  const orderData = OrderDataFactory.createOrderData('mysql-standalone');
   const body = orderData.buildOrderBody();
   
   const url = `/mysql-manager/api/v1/projects/${process.env.PROJECT_ID}/order-service/orders`;
 
-  console.log('Creating mysql cluster:', body.order.attrs.cluster_name);
+  // оставить пока для отладки
+  //console.log('Создание заказа:', body.order.attrs.cluster_name);
 
   const res = await api.post(url, { data: body });
   const status = res.status();
 
   if (status !== 200) {
     const errorText = await res.text();
-    console.error('mysql order failed:', errorText);
+    console.error('MySQL заказ упал:', errorText);
     expect(status).toBe(200);
   } else {
-    console.log('mysql order created successfully');
+    console.log('MySQL кластер успешно создан!');
   }
 });

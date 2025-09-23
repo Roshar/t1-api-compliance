@@ -1,0 +1,14 @@
+tests/data/
+├── OrderData.ts                 # Базовый абстрактный класс
+├── OrderDataFactory.ts          # Фабрика
+├── REDIS/                       # Все Redis конфигурации
+│   ├── RedisStandaloneData.ts
+│   ├── RedisSentinelData.ts
+│   └── RedisClusterData.ts
+├── MYSQL/                       # Все MySQL конфигурации
+│   ├── MySQLStandaloneData.ts
+│   └── MySQLClusterData.ts
+└── OPENSEARCH/                  # Все OpenSearch конфигурации
+    ├── OpenSearchSingleData.ts
+    ├── OpenSearchClusterWithoutDashboardData.ts
+    └── OpenSearchClusterWithDashboardData.ts

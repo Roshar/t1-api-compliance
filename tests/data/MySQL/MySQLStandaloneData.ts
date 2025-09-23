@@ -1,6 +1,6 @@
-import { OrderData } from './OrderData';
+import { OrderData } from '../OrderData';
 
-export class MySQLOrderData extends OrderData {
+export class MySQLStandaloneData extends OrderData {
   protected getParameters() {
     throw new Error('Method not implemented.');
   }
