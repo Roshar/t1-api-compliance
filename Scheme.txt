@@ -1,6 +1,7 @@
 tests/data/
 ├── OrderData.ts                 # Базовый абстрактный класс
 ├── OrderDataFactory.ts          # Фабрика
+├── RegionSelector.ts            # конфигурации по регионам
 ├── REDIS/                       # Все Redis конфигурации
 │   ├── RedisStandaloneData.ts
 │   ├── RedisSentinelData.ts

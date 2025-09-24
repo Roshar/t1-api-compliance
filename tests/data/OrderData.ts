@@ -31,13 +31,6 @@ export abstract class OrderData {
     ];
   }
 
-  // Абстрактные методы - тут оставим реализацию для каждого продукта по своему 
-  //TODO продумать для кластеров с несколькими ВМ
-  protected abstract getRegion(): any;
-  protected abstract getAvailabilityZone(): any;
-  protected abstract getSubnet(): any;
-  protected abstract getFlavor(): any;
-  protected abstract getBootVolume(): any;
   protected getParameters(): any {
     return undefined;
   }
