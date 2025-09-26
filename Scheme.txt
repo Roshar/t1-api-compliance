@@ -2,7 +2,7 @@ tests/data/
 ├── OrderData.ts                 # Базовый абстрактный класс
 ├── OrderDataFactory.ts          # Фабрика
 ├── RegionSelector.ts            # конфигурации по регионам
-├── REDIS/                       # Все Redis конфигурации
+├── REDIS/                     
 │   ├── RedisStandaloneData.ts
 │   ├── RedisSentinelData.ts
 │   └── RedisClusterData.ts
@@ -13,3 +13,11 @@ tests/data/
     ├── OpenSearchSingleData.ts
     ├── OpenSearchClusterWithoutDashboardData.ts
     └── OpenSearchClusterWithDashboardData.ts
+
+tests/helpers
+├── auth.ts. #авторизация
+
+tests/
+├── mysql-standalone.spec
+├── redis-sentinel.spec
+├── redis-standalone.spec
