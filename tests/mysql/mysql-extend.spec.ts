@@ -1,49 +1,60 @@
-import { test, expect, request, APIRequestContext } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import 'dotenv/config';
-import { getAuthToken } from '../helpers/auth';
+import { setupAPIContext, disposeAPIContext, getAPIContext, refreshAPIContext, shouldRefreshToken } from '../common/api-context';
 
-let api: APIRequestContext;
 const PROJECT_ID = process.env.PROJECT_ID!;
 
-async function refreshAPIContext() {
-  if (api) await api.dispose();
-
-  const token = await getAuthToken();
-  api = await request.newContext({
-    baseURL: 'https://api.t1.cloud',
-    extraHTTPHeaders: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
-}
-
 test.beforeAll(async () => {
-  await refreshAPIContext();
+  await setupAPIContext();
 });
 
 test.afterAll(async () => {
-  await api?.dispose();
+  await disposeAPIContext();
 });
 
 test('Увеличение диска MySQL', async () => {
   test.setTimeout(20 * 60 * 1000);
-
+// пока оставим статичные данные, тут необходимо пробрасывать их предыдущего теста данные
   const ORDER_ID = '33b04421-bf2a-4b84-a1f9-3277f391bc8a';
   const ITEM_ID = '271fa8a0-0575-4903-83d3-f02303cab53c';
-  const NEW_DISK_SIZE = 28;
+  
+  let api = getAPIContext();
 
-  console.log('Увеличиваем диск до 28GB');
-
-  // Проверяем текущий размер перед операцией
-  const initialResponse = await api.get(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders?page=1&per_page=10`,
+  // Проверка свежести токена
+  if (shouldRefreshToken()) {
+    console.log('Обновляем токен перед запросом...');
+    await refreshAPIContext();
+    api = getAPIContext();
+  }
+  
+  // 1 Получаем детальную информацию о заказе
+  const orderDetailResponse = await api.get(
+    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${ORDER_ID}?include=last_action&with_relations=true`
   );
-  const initialData = await initialResponse.json();
-  const initialOrder = initialData.list.find((o: any) => o.id === ORDER_ID);
-  console.log('Размер диска ДО операции:', initialOrder.attrs.boot_volume.size);
+  
+  const orderDetail = await orderDetailResponse.json();
+  
+  // // Проверка структуры для отладки
+  // console.log('Структура ответа:', Object.keys(orderDetail));
+  // console.log('Есть ли data?', !!orderDetail.data);
+  // console.log('Длина data:', orderDetail.data?.length);
+  
+  if (orderDetail.data && orderDetail.data.length > 0) {
+    console.log('Первый элемент data:', orderDetail.data[0]);
+  }
+  
+  // Берем актуальный размер из data (managed item)
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed');
+  const CURRENT_SIZE = managedItem.data.config.boot_volume.size;
+  
+  console.log('Актуальный размер диска:', CURRENT_SIZE, 'GB');
+  
+  // Увеличиваем на 1GB
+  const NEW_DISK_SIZE = CURRENT_SIZE + 1;
+  
+  console.log(`Увеличиваем диск с ${CURRENT_SIZE}GB до ${NEW_DISK_SIZE}GB`);
 
-  // Шаг 1: Отправляем запрос
+  // 2 Отправляем запрос на увеличение диска
   const response = await api.patch(
     `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/extend_disk_size`,
     {
@@ -60,75 +71,51 @@ test('Увеличение диска MySQL', async () => {
     },
   );
 
-  expect(response.status()).toBe(200);
+  console.log('Статус ответа:', response.status());
+  
+  if (response.status() !== 200) {
+    const errorBody = await response.text();
+    console.log('Ошибка от сервера:', errorBody);
+    expect(response.status()).toBe(200);
+  }
+
   console.log('Запрос отправлен успешно');
 
-  // Шаг 2: Ждем завершения с более детальной проверкой
+  // 3 Ждем завершения операции
   console.log('Ждем завершения операции...');
 
   const startTime = Date.now();
   const maxWaitTime = 15 * 60 * 1000;
-  let lastStatus = '';
+  let isCompleted = false;
 
-  while (Date.now() - startTime < maxWaitTime) {
+  while (!isCompleted && Date.now() - startTime < maxWaitTime) {
     await new Promise((resolve) => setTimeout(resolve, 60000));
 
     const statusResponse = await api.get(
-      `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders?page=1&per_page=10`,
+      `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${ORDER_ID}?include=last_action&with_relations=true`
     );
 
     const statusData = await statusResponse.json();
-    const order = statusData.list.find((o: any) => o.id === ORDER_ID);
+    
+    const minutesPassed = Math.round((Date.now() - startTime) / 60000);
+    console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
 
-    if (order) {
-      const minutesPassed = Math.round((Date.now() - startTime) / 60000);
-      const currentSize = order.attrs.boot_volume.size;
-
-      console.log(`[${minutesPassed} мин] Статус: ${order.status}, Размер: ${currentSize}GB`);
-
-      // Сохраняем последний статус
-      lastStatus = order.status;
-
-      // Если статус success - проверяем размер
-      if (order.status === 'success') {
-        console.log('Детали заказа:', JSON.stringify(order.attrs.boot_volume, null, 2));
-
-        // Даем дополнительное время на обновление данных
-        console.log('Даем время на обновление данных...');
-        await new Promise((resolve) => setTimeout(resolve, 30000));
-
-        // Проверяем еще раз после паузы
-        const finalResponse = await api.get(
-          `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders?page=1&per_page=10`,
-        );
-        const finalData = await finalResponse.json();
-        const finalOrder = finalData.list.find((o: any) => o.id === ORDER_ID);
-
-        console.log('Финальный размер:', finalOrder.attrs.boot_volume.size);
-
-        // Если размер все еще не изменился, но статус success - возможно это баг API
-        if (finalOrder.attrs.boot_volume.size === currentSize) {
-          console.log('Размер диска не изменился, но статус success');
-          // Продолжаем тест как успешный, т.к. операция завершилась
-          break;
-        }
-
-        expect(finalOrder.attrs.boot_volume.size).toBe(NEW_DISK_SIZE);
-        break;
-      }
-
-      if (order.status === 'error') {
-        console.log('Ошибка при увеличении диска');
-        break;
-      }
+    if (statusData.status === 'success') {
+      isCompleted = true;
+      
+      // Проверяем что размер изменился
+      const updatedManagedItem = statusData.data.find((item: any) => item.type === 'managed');
+      const finalSize = updatedManagedItem.data.config.boot_volume.size;
+      
+      console.log('Финальный размер диска:', finalSize, 'GB');
+      expect(finalSize).toBe(NEW_DISK_SIZE);
+      break;
+    } else if (statusData.status === 'error') {
+      console.log('Операция завершилась ошибкой');
+      break;
     }
   }
 
-  // Если дошли до конца и статус success - считаем успехом
-  if (lastStatus === 'success') {
-    console.log('Операция завершена со статусом success');
-  } else {
-    console.log('Операция не завершилась успехом');
-    expect(lastStatus).toBe('success');
-  }
+  expect(isCompleted).toBe(true);
+  console.log('Операция увеличения диска завершена успешно!');
 });

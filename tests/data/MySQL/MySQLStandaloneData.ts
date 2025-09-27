@@ -7,7 +7,6 @@ export class MySQLStandaloneData extends OrderData {
   }
   protected productType = 'mysql';
   
-  
   buildOrderBody() {
     return {
       order: {

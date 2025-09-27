@@ -1,7 +1,5 @@
 import { OrderData } from '../OrderData';
 import {selectedRegion, regName} from '../RegionSelector'
-
-
 export class RedisSentinelData extends OrderData {
   protected productType = 'redis';
 
