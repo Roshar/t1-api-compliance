@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 import 'dotenv/config';
 import { setupAPIContext, disposeAPIContext, getAPIContext, refreshAPIContext, shouldRefreshToken } from '../common/api-context';
+import { testData } from '../common/test-data'; 
+import { checkClusterStatus } from '../common/cluster-status';
 
 const PROJECT_ID = process.env.PROJECT_ID!;
 
@@ -14,9 +16,24 @@ test.afterAll(async () => {
 
 test('Увеличение диска MySQL', async () => {
   test.setTimeout(20 * 60 * 1000);
-// пока оставим статичные данные, тут необходимо пробрасывать их предыдущего теста данные
-  const ORDER_ID = '33b04421-bf2a-4b84-a1f9-3277f391bc8a';
-  const ITEM_ID = '271fa8a0-0575-4903-83d3-f02303cab53c';
+// Статичные данные для отладки (НЕ УДАЛЯТЬ!)
+  // const ORDER_ID = '33b04421-bf2a-4b84-a1f9-3277f391bc8a';
+  // const ITEM_ID = '271fa8a0-0575-4903-83d3-f02303cab53c';
+
+  /**
+   * Тут проврка на существования исходных данных:
+   * - testData.mysqlCluster = null, значит кластер не был создан
+   * - и если testData.mysqlCluster = null, то просто скипаем тест 
+   * !!!Если работает со статичными этот метод можно закоментить
+   */
+  if (!testData.mysqlCluster) {
+    console.log('Кластер не создан, используем статические данные');
+    test.skip();
+    return;
+  }
+
+   // Извлекаем данные созданного кластера из хранилища
+  const { orderId: ORDER_ID, itemId: ITEM_ID } = testData.mysqlCluster;
   
   let api = getAPIContext();
 
@@ -27,7 +44,7 @@ test('Увеличение диска MySQL', async () => {
     api = getAPIContext();
   }
   
-  // 1 Получаем детальную информацию о заказе
+  // 1 Получаем детальную информацию о заказе (узнаем текущий размер диска)
   const orderDetailResponse = await api.get(
     `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${ORDER_ID}?include=last_action&with_relations=true`
   );
@@ -38,11 +55,7 @@ test('Увеличение диска MySQL', async () => {
   // console.log('Структура ответа:', Object.keys(orderDetail));
   // console.log('Есть ли data?', !!orderDetail.data);
   // console.log('Длина data:', orderDetail.data?.length);
-  
-  if (orderDetail.data && orderDetail.data.length > 0) {
-    console.log('Первый элемент data:', orderDetail.data[0]);
-  }
-  
+
   // Берем актуальный размер из data (managed item)
   const managedItem = orderDetail.data.find((item: any) => item.type === 'managed');
   const CURRENT_SIZE = managedItem.data.config.boot_volume.size;
@@ -53,6 +66,10 @@ test('Увеличение диска MySQL', async () => {
   const NEW_DISK_SIZE = CURRENT_SIZE + 1;
   
   console.log(`Увеличиваем диск с ${CURRENT_SIZE}GB до ${NEW_DISK_SIZE}GB`);
+
+
+  // Проверяем статус кластера перед выполнением операции
+    await checkClusterStatus(api, PROJECT_ID, ORDER_ID, ITEM_ID);
 
   // 2 Отправляем запрос на увеличение диска
   const response = await api.patch(
@@ -97,6 +114,7 @@ test('Увеличение диска MySQL', async () => {
 
     const statusData = await statusResponse.json();
     
+    //Логируем процесс 
     const minutesPassed = Math.round((Date.now() - startTime) / 60000);
     console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
 
