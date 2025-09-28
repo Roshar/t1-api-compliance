@@ -14,9 +14,9 @@ test.afterAll(async () => {
   await disposeAPIContext();
 });
 
-test('Подключение Public IP к MySQL кластеру', async () => {
-  test.setTimeout(20 * 60 * 1000); 
-
+test('Отключение Public IP от MySQL кластера', async () => {
+  test.setTimeout(20 * 60 * 1000);
+  
   // Статичные данные для отладки (НЕ УДАЛЯТЬ!)
   const ORDER_ID = '33b04421-bf2a-4b84-a1f9-3277f391bc8a';
   const ITEM_ID = '271fa8a0-0575-4903-83d3-f02303cab53c';
@@ -27,9 +27,9 @@ test('Подключение Public IP к MySQL кластеру', async () => {
 //     return;
 //   }
   
-//   const { orderId: ORDER_ID, itemId: ITEM_ID, clusterName } = testData.mysqlCluster;
+//   const { orderId: ORDER_ID, itemId: ITEM_ID } = testData.mysqlCluster;
   
-  console.log('Начинаем подключение Public IP для кластера:');
+  console.log('Начинаем отключение Public IP для кластера:');
   console.log('Используем данные:', { ORDER_ID, ITEM_ID });
 
   let api = getAPIContext();
@@ -40,13 +40,10 @@ test('Подключение Public IP к MySQL кластеру', async () => {
     api = getAPIContext();
   }
 
-
-// Проверяем статус кластера перед выполнением операции
+  // Проверяем статус кластера перед выполнением операции
   await checkClusterStatus(api, PROJECT_ID, ORDER_ID, ITEM_ID);
 
-
-// Тут еще добавлена проверка на случай если в кластере уже публичный ip адрес подключен
-// Получаем текущую конфигурацию кластера
+  // Получаем текущую конфигурацию кластера
   const orderDetailResponse = await api.get(
     `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${ORDER_ID}?include=last_action&with_relations=true`
   );
@@ -63,48 +60,46 @@ test('Подключение Public IP к MySQL кластеру', async () => {
   const currentPublicIpStatus = managedItem.data.config.public_ip;
   console.log('Текущий статус Public IP:', currentPublicIpStatus);
 
-  // Проверяем что Public IP отключен
-  if (currentPublicIpStatus === true) {
-    console.log('Public IP уже подключен, пропускаем тест');
+  // Проверяем что Public IP изначально подключен
+  if (currentPublicIpStatus === false) {
+    console.log('Public IP уже отключен, пропускаем тест');
     test.skip();
     return;
   }
 
-  expect(currentPublicIpStatus).toBe(false);
-  console.log('Можно подключать');
+  expect(currentPublicIpStatus).toBe(true);
+  console.log('Public IP подключен, можно отключать');
 
-// Запускаем действие по подключению public ip 
-  const publicIpPayload = {
+  // Отключаем Public IP
+  const disablePublicIpPayload = {
     project_name: PROJECT_ID,
     id: ORDER_ID,
     item_id: ITEM_ID,
     order: {
-      attrs: {
-        bandwidth: 100  // 100 Mbps
-      }
+      attrs: {}
     }
   };
 
-  const addPublicIpResponse = await api.patch(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/add_fip_managed_mysql`,
-    { data: publicIpPayload }
+  const disablePublicIpResponse = await api.patch(
+    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/disable_fip_managed_mysql`,
+    { data: disablePublicIpPayload }
   );
 
-  console.log('Статус ответа на подключение Public IP:', addPublicIpResponse.status());
+  console.log('Статус ответа на отключение Public IP:', disablePublicIpResponse.status());
 
-  if (addPublicIpResponse.status() !== 200) {
-    const errorBody = await addPublicIpResponse.text();
+  if (disablePublicIpResponse.status() !== 200) {
+    const errorBody = await disablePublicIpResponse.text();
     console.log('Ошибка от сервера:', errorBody);
-    expect(addPublicIpResponse.status()).toBe(200);
+    expect(disablePublicIpResponse.status()).toBe(200);
   }
 
-  console.log('Запрос на подключение Public IP отправлен успешно');
+  console.log('Запрос на отключение Public IP отправлен успешно');
 
-  //  Ждем завершения операции подключения Public IP
-  console.log('Ждем завершения операции подключения public ip...');
+  // Ждем завершения операции
+  console.log('Ждем завершения операции отключения Public IP...');
 
   const startTime = Date.now();
-  const maxWaitTime = 15 * 60 * 1000; // 15 минут максимум
+  const maxWaitTime = 15 * 60 * 1000;
   let isCompleted = false;
 
   while (!isCompleted && Date.now() - startTime < maxWaitTime) {
@@ -130,24 +125,20 @@ test('Подключение Public IP к MySQL кластеру', async () => {
       isCompleted = true;
     }
 
-    // Проверяем что Public IP появился в конфигурации
+    // Проверяем что Public IP пропал из конфигурации
     const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
     
-    if (currentManagedItem && currentManagedItem.data.config.public_ip === true) {
+    if (currentManagedItem && currentManagedItem.data.config.public_ip === false) {
       isCompleted = true;
-      console.log('Public IP обнаружен в конфигурации');
+      console.log('Public IP отключен в конфигурации');
     }
 
     if (statusData.status === 'success' && isCompleted) {
-      // Финальная проверка конфигурации
       const publicIpEnabled = currentManagedItem.data.config.public_ip;
-      const bandwidth = currentManagedItem.data.config.bandwidth;
       
       console.log('Public IP включен:', publicIpEnabled);
-      console.log('Ширина канала:', bandwidth, 'Mbps');
       
-      expect(publicIpEnabled).toBe(true);
-      expect(bandwidth).toBe(100);
+      expect(publicIpEnabled).toBe(false);
       break;
     } else if (statusData.status === 'error') {
       console.log('Операция завершилась ошибкой');
@@ -156,5 +147,5 @@ test('Подключение Public IP к MySQL кластеру', async () => {
   }
 
   expect(isCompleted).toBe(true);
-  console.log('Операция подключения Public IP завершена успешно!');
+  console.log('Операция отключения Public IP завершена успешно!');
 });
