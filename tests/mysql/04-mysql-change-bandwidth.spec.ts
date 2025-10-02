@@ -1,0 +1,27 @@
+import { test } from '@playwright/test';
+import 'dotenv/config';
+import { setupAPIContext, disposeAPIContext } from '../../common/api-context';
+import { testData } from '../../common/test-data'; 
+import { changeBandwidth } from '../../common/mysql-operations';
+
+test.beforeAll(async () => {
+  await setupAPIContext();
+});
+
+test.afterAll(async () => {
+  await disposeAPIContext();
+});
+
+test('Изменение ширины канала Public IP MySQL кластера', async () => {
+  test.setTimeout(20 * 60 * 1000);
+
+  if (!testData.mysqlCluster) {
+    console.log('Кластер не создан, пропускаем тест');
+    test.skip();
+    return;
+  }
+
+    const { orderId, itemId } = testData.mysqlCluster;
+    await changeBandwidth(orderId, itemId);
+  
+});

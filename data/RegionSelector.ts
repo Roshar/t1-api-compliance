@@ -110,10 +110,10 @@ const region1 = {
 
 
 //Используем регион 1
-  export const regName = 'region-1';
-  export const selectedRegion = region1; 
+  // export const regName = 'region-1';
+  // export const selectedRegion = region1; 
 
 //Используем регион 2
-// export const selectedRegion = region2; // Используем регион 2
-// export const regName = 'region-2';
+export const selectedRegion = region2; // Используем регион 2
+export const regName = 'region-2';
   

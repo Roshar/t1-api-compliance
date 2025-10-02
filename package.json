@@ -2,7 +2,9 @@
   "name": "t1-api",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "test:mysql:auto": "node run.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -14,4 +16,5 @@
   "dependencies": {
     "dotenv": "^17.2.2"
   }
+
 }

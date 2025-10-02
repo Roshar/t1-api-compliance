@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import 'dotenv/config';
-import { OrderDataFactory } from '../data/OrderDataFactory';
-import { setupAPIContext, disposeAPIContext, getAPIContext, refreshAPIContext, shouldRefreshToken } from '../common/api-context';
+import { OrderDataFactory } from '../../data/OrderDataFactory';
+import { setupAPIContext, disposeAPIContext, getAPIContext, refreshAPIContext, shouldRefreshToken } from '../../common/api-context';
 
 const PROJECT_ID = process.env.PROJECT_ID!;
 
