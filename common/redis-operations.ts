@@ -1,12 +1,12 @@
 import { OrderDataFactory } from '../data/OrderDataFactory';
 import { getAPIContext, refreshAPIContext, shouldRefreshToken } from './api-context';
 import { checkClusterStatus } from './cluster-status';
-import { generateRandomUsername, generateRandomPassword, generateRandomDatabaseName } from '../common/test-data-generators';
+import { generateRandomUsername, generateRandomPassword } from '../common/test-data-generators';
 import {ProductType} from '../data/OrderDataFactory'
 
 const PROJECT_ID = process.env.PROJECT_ID!;
 
-export async function createMySQLCluster(productType: string = 'mysql-standalone') {
+export async function createCluster(productType: string = 'redis-standalone') {
   const orderData = OrderDataFactory.createOrderData(productType as ProductType);
   const body = orderData.buildOrderBody();
   const clusterName = body.order.attrs.cluster_name;
@@ -22,7 +22,7 @@ export async function createMySQLCluster(productType: string = 'mysql-standalone
   }
 
   const createResponse = await api.post(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders`,
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders`,
     { data: body },
   );
 
@@ -54,7 +54,7 @@ export async function createMySQLCluster(productType: string = 'mysql-standalone
 
     try {
       const listResponse = await api.get(
-        `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders?page=1&per_page=5`
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders?page=1&per_page=5`
       );
 
       if (listResponse.status() === 200) {
@@ -66,7 +66,7 @@ export async function createMySQLCluster(productType: string = 'mysql-standalone
           console.log('Кластер развернут!');
 
           const detailResponse = await api.get(
-            `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+            `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
           );
           const detailData = await detailResponse.json();
           
@@ -89,7 +89,8 @@ export async function createMySQLCluster(productType: string = 'mysql-standalone
   throw new Error('Кластер упал по таймауту');
 }
 
-export async function extendMySQLDisk(orderId: string, itemId: string) {
+// redis-operations.ts
+export async function extendDisk(orderId: string, itemId: string) {
   let api = getAPIContext();
 
   if (shouldRefreshToken()) {
@@ -98,13 +99,22 @@ export async function extendMySQLDisk(orderId: string, itemId: string) {
     api = getAPIContext();
   }
   
+  // Получаем информацию о заказе
   const orderDetailResponse = await api.get(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
   );
   
   const orderDetail = await orderDetailResponse.json();
   
-  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed');
+  // Ищем managed item для Redis
+  const managedItem = orderDetail.data.find((item: any) => 
+    item.type === 'managed' && item.provider === 'redis_vm'
+  );
+  
+  if (!managedItem) {
+    throw new Error('Не найден managed item для Redis в заказе');
+  }
+  
   const CURRENT_SIZE = managedItem.data.config.boot_volume.size;
   
   console.log('Актуальный размер диска:', CURRENT_SIZE, 'GB');
@@ -113,10 +123,11 @@ export async function extendMySQLDisk(orderId: string, itemId: string) {
   
   console.log(`Увеличиваем диск с ${CURRENT_SIZE}GB до ${NEW_DISK_SIZE}GB`);
 
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
+  // Используем универсальную проверку статуса с указанием типа продукта
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
 
   const response = await api.patch(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/extend_disk_size`,
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/extend_disk_size`,
     {
       data: {
         project_name: PROJECT_ID,
@@ -150,7 +161,7 @@ export async function extendMySQLDisk(orderId: string, itemId: string) {
     await new Promise((resolve) => setTimeout(resolve, 60000));
 
     const statusResponse = await api.get(
-      `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+      `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
     );
 
     const statusData = await statusResponse.json();
@@ -161,7 +172,10 @@ export async function extendMySQLDisk(orderId: string, itemId: string) {
     if (statusData.status === 'success') {
       isCompleted = true;
       
-      const updatedManagedItem = statusData.data.find((item: any) => item.type === 'managed');
+      // Ищем обновленный managed item для Redis
+      const updatedManagedItem = statusData.data.find((item: any) => 
+        item.type === 'managed' && item.provider === 'redis_vm'
+      );
       const finalSize = updatedManagedItem.data.config.boot_volume.size;
       
       console.log('Финальный размер диска:', finalSize, 'GB');
@@ -193,17 +207,17 @@ export async function addPublicIp(orderId: string, itemId: string) {
   }
 
   // Проверяем статус кластера перед выполнением операции
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
   
   // Получаем текущую конфигурацию кластера
   const orderDetailResponse = await api.get(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
   );
   
   const orderDetail = await orderDetailResponse.json();
   
   // Ищем managed item чтобы проверить текущее состояние Public IP
-  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
   
   if (!managedItem) {
     throw new Error('Не найден managed item в заказе');
@@ -233,7 +247,7 @@ export async function addPublicIp(orderId: string, itemId: string) {
   };
 
   const addPublicIpResponse = await api.patch(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/add_fip_managed_mysql`,
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/add_fip_managed_redis`,
     { data: publicIpPayload }
   );
 
@@ -263,7 +277,7 @@ export async function addPublicIp(orderId: string, itemId: string) {
     }
 
     const statusResponse = await api.get(
-      `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+      `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
     );
 
     const statusData = await statusResponse.json();
@@ -272,7 +286,7 @@ export async function addPublicIp(orderId: string, itemId: string) {
     console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
 
     // Проверяем что Public IP появился в конфигурации
-    const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
+    const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
     
     if (currentManagedItem && currentManagedItem.data.config.public_ip === true) {
       isCompleted = true;
@@ -313,17 +327,17 @@ export async function changeBandwidth(orderId: string, itemId: string) {
   }
 
   // Проверяем статус кластера перед выполнением операции
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
   
   // Получаем текущую конфигурацию кластера
   const orderDetailResponse = await api.get(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
   );
 
   const orderDetail = await orderDetailResponse.json();
     
   // Ищем managed item чтобы проверить текущее состояние
-  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
   
   if (!managedItem) {
     throw new Error('Не найден managed item в заказе');
@@ -344,7 +358,7 @@ export async function changeBandwidth(orderId: string, itemId: string) {
 
   // Генерируем случайную ширину канала от 200 до 10000 Mbps
   const availableBandwidths = [200, 500, 1000, 2000, 5000, 10000];
-  const NEW_BANDWIDTH = availableBandwidths[Math.floor(Math.random() * availableBandwidths.length)];
+  let NEW_BANDWIDTH = availableBandwidths[Math.floor(Math.random() * availableBandwidths.length)];
   
   // Проверяем что новая ширина канала отличается от текущей
   if (currentBandwidth === NEW_BANDWIDTH) {
@@ -372,7 +386,7 @@ export async function changeBandwidth(orderId: string, itemId: string) {
   };
 
   const changeBandwidthResponse = await api.patch(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/change_bandwidth_managed`,
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/change_bandwidth_managed`,
     { data: changeBandwidthPayload }
   );
 
@@ -402,7 +416,7 @@ export async function changeBandwidth(orderId: string, itemId: string) {
     }
 
     const statusResponse = await api.get(
-      `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+      `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
     );
 
     const statusData = await statusResponse.json();
@@ -411,7 +425,7 @@ export async function changeBandwidth(orderId: string, itemId: string) {
     console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
 
     // Проверяем что ширина канала изменилась в конфигурации
-    const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
+    const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
     
     if (currentManagedItem && currentManagedItem.data.config.bandwidth === NEW_BANDWIDTH) {
       isCompleted = true;
@@ -458,17 +472,17 @@ export async function disablePublicIp(orderId: string, itemId: string) {
   }
 
   // Проверяем статус кластера перед выполнением операции
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
 
   // Получаем текущую конфигурацию кластера
   const orderDetailResponse = await api.get(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
   );
   
   const orderDetail = await orderDetailResponse.json();
   
   // Ищем managed item чтобы проверить текущее состояние Public IP
-  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
   
   if (!managedItem) {
     throw new Error('Не найден managed item в заказе');
@@ -496,7 +510,7 @@ export async function disablePublicIp(orderId: string, itemId: string) {
   };
 
   const disablePublicIpResponse = await api.patch(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/disable_fip_managed_mysql`,
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/disable_fip_managed_redis`,
     { data: disablePublicIpPayload }
   );
 
@@ -526,7 +540,7 @@ export async function disablePublicIp(orderId: string, itemId: string) {
     }
 
     const statusResponse = await api.get(
-      `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+      `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
     );
 
     const statusData = await statusResponse.json();
@@ -535,7 +549,7 @@ export async function disablePublicIp(orderId: string, itemId: string) {
     console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
 
     // Проверяем что Public IP пропал из конфигурации
-    const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
+    const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
     
     if (currentManagedItem && currentManagedItem.data.config.public_ip === false) {
       isCompleted = true;
@@ -564,7 +578,7 @@ export async function disablePublicIp(orderId: string, itemId: string) {
   console.log('Операция отключения Public IP завершена успешно!');
 }
 
-export async function createMySQLUser(orderId: string, itemId: string, clusterName: string) {
+export async function createUser(orderId: string, itemId: string, clusterName: string) {
   let api = getAPIContext();
 
   if (shouldRefreshToken()) {
@@ -574,7 +588,7 @@ export async function createMySQLUser(orderId: string, itemId: string, clusterNa
   }
 
   // Проверяем статус кластера перед выполнением операции
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
 
   // Генерируем случайные данные пользователя
   const username = generateRandomUsername();
@@ -587,12 +601,12 @@ export async function createMySQLUser(orderId: string, itemId: string, clusterNa
   const createUserPayload = {
     name: username,
     password: password,
-    privileges: "ALL",
-    db_table: "*.*"
+    rules: "~* +@all",
+    should_be_admin: false
   };
 
   const createUserResponse = await api.post(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/services/${clusterName}/users`,
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/services/${clusterName}/users`,
     { data: createUserPayload }
   );
 
@@ -609,6 +623,8 @@ export async function createMySQLUser(orderId: string, itemId: string, clusterNa
   // Извлекаем ID команды из URL
   const commandId = createUserData.url.split('/').pop();
   console.log('Command ID для проверки статуса:', commandId);
+
+  console.log(`// ID команды из URL ${commandId}`)
 
   // Ждем завершения операции создания пользователя
   console.log('Ждем завершения операции создания пользователя...');
@@ -630,7 +646,7 @@ export async function createMySQLUser(orderId: string, itemId: string, clusterNa
 
     try {
       const commandResponse = await api.get(
-        `/mysql-manager/api/v1/projects/${PROJECT_ID}/commands/${commandId}`
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/commands/${commandId}`
       );
 
       if (commandResponse.status() !== 200) {
@@ -690,58 +706,48 @@ export async function createMySQLUser(orderId: string, itemId: string, clusterNa
   return username; // Возвращаем имя созданного пользователя
 }
 
-export async function createMySQLDatabase(orderId: string, itemId: string, clusterName: string) {
+export async function createBackup(orderId: string, itemId: string, clusterName: string) {
   let api = getAPIContext();
 
   if (shouldRefreshToken()) {
-    console.log('Обновляем токен перед запросом...');
+    console.log('Обновляем токен перед созданием бэкапа...');
     await refreshAPIContext();
     api = getAPIContext();
   }
 
   // Проверяем статус кластера перед выполнением операции
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
 
-  // Генерируем случайное название для БД
-  const dbname = generateRandomDatabaseName(); // Используем специализированную функцию если есть, или generateRandomUsername()
- 
-  console.log('Создаем БД с именем:', dbname);
+  console.log(`Начинаем создание резервной копии для Redis кластера: ${clusterName}`);
 
-  // Создаем базу данных
-  const createDbPayload = {
-    name: dbname,
-    character_set: "utf8mb3",
-    collation: "utf8mb3_general_ci",
-    encryption: "NO"
-  };
-
-  const createDbResponse = await api.post(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/services/${clusterName}/databases`,
-    { data: createDbPayload }
+  // Создаем резервную копию
+  const createBackupResponse = await api.post(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/services/${clusterName}/backups`
   );
 
-  console.log('Статус ответа на создание БД:', createDbResponse.status());
+  console.log('Статус ответа на создание резервной копии:', createBackupResponse.status());
 
-  if (createDbResponse.status() !== 202) {
-    const errorBody = await createDbResponse.text();
-    throw new Error(`Ожидался статус 202, но получен ${createDbResponse.status()}: ${errorBody}`);
+  if (createBackupResponse.status() !== 202) {
+    const errorBody = await createBackupResponse.text();
+    throw new Error(`Ожидался статус 202, но получен ${createBackupResponse.status()}: ${errorBody}`);
   }
 
-  const createDbData = await createDbResponse.json();
-  console.log('Команда создания БД отправлена, URL:', createDbData.url);
+  const createBackupData = await createBackupResponse.json();
+  console.log('Команда создания резервной копии отправлена, URL:', createBackupData.url);
 
   // Извлекаем ID команды из URL
-  const commandId = createDbData.url.split('/').pop();
+  const commandId = createBackupData.url.split('/').pop();
   console.log('Command ID для проверки статуса:', commandId);
 
-  // Ждем завершения операции создания БД
-  console.log('Ждем завершения операции создания БД...');
+  // Ждем завершения операции создания резервной копии
+  console.log('Ждем завершения операции создания резервной копии...');
 
   const startTime = Date.now();
-  const maxWaitTime = 5 * 60 * 1000; 
+  const maxWaitTime = 10 * 60 * 1000; 
   let isCompleted = false;
   let retryCount = 0;
   const maxRetries = 3;
+  let backupName = '';
 
   while (!isCompleted && Date.now() - startTime < maxWaitTime) {
     await new Promise((resolve) => setTimeout(resolve, 30000));
@@ -754,13 +760,12 @@ export async function createMySQLDatabase(orderId: string, itemId: string, clust
 
     try {
       const commandResponse = await api.get(
-        `/mysql-manager/api/v1/projects/${PROJECT_ID}/commands/${commandId}`
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/commands/${commandId}`
       );
 
       if (commandResponse.status() !== 200) {
         const errorBody = await commandResponse.text();
         
-        // Если ошибка сервера, пробуем еще раз
         if (commandResponse.status() >= 500 && retryCount < maxRetries) {
           retryCount++;
           console.log(`Ошибка сервера, повторная попытка ${retryCount}/${maxRetries}: ${errorBody}`);
@@ -768,7 +773,6 @@ export async function createMySQLDatabase(orderId: string, itemId: string, clust
           continue;
         }
         
-        // Если клиентская ошибка, выходим
         throw new Error(`Ошибка при проверке статуса команды: ${commandResponse.status()} - ${errorBody}`);
       }
 
@@ -779,17 +783,36 @@ export async function createMySQLDatabase(orderId: string, itemId: string, clust
 
       if (commandData.status === 'success') {
         isCompleted = true;
-        console.log('База данных успешно создана');
+        console.log('Резервная копия успешно создана');
+        
+        // Получаем информацию о созданном бэкапе сразу после успеха
+        console.log('Получаем информацию о созданной резервной копии...');
+        const listBackupsResponse = await api.get(
+          `/redis-manager/api/v1/projects/${PROJECT_ID}/services/${clusterName}/backups`
+        );
+
+        if (listBackupsResponse.status() === 200) {
+          const backupsData = await listBackupsResponse.json();
+          if (backupsData.backups && backupsData.backups.length > 0) {
+            backupName = backupsData.backups[0].backup_name;
+            console.log(`Создана резервная копия: ${backupName}`);
+            console.log(`Статус бэкапа: ${backupsData.backups[0].status}`);
+            console.log(`Размер: ${backupsData.backups[0].size} байт`);
+          } else {
+            console.log('Внимание: резервные копии не найдены после успешного создания');
+          }
+        } else {
+          console.log('Не удалось получить список бэкапов, но создание завершено успешно');
+        }
+        
         break;
       } else if (commandData.status === 'failed') {
-        throw new Error(`Создание базы данных завершилось ошибкой: ${commandData.error || 'Неизвестная ошибка'}`);
+        throw new Error(`Создание резервной копии завершилось ошибкой: ${commandData.error || 'Неизвестная ошибка'}`);
       }
 
-      // Сбрасываем счетчик ретраев при успешном запросе
       retryCount = 0;
 
     } catch (error) {
-      // Обрабатываем сетевые ошибки
       retryCount++;
       console.log(`Сетевая ошибка (попытка ${retryCount}/${maxRetries}):`, String(error));
       
@@ -800,21 +823,20 @@ export async function createMySQLDatabase(orderId: string, itemId: string, clust
       console.log('Повторная попытка через 10 секунд...');
       await new Promise((resolve) => setTimeout(resolve, 10000));
       
-      // Пробуем обновить контекст API при сетевых ошибках
       await refreshAPIContext();
       api = getAPIContext();
     }
   }
 
   if (!isCompleted) {
-    throw new Error('Создание базы данных не завершилось за отведенное время');
+    throw new Error('Создание резервной копии не завершилось за отведенное время');
   }
 
-  console.log('Операция создания базы данных завершена успешно!');
-  return dbname; // Возвращаем имя созданной базы данных
+  console.log('Операция создания резервной копии завершена успешно!');
+  return backupName || 'unknown_backup';
 }
 
-export async function editMySQLSettings(orderId: string, itemId: string) {
+export async function editSettings(orderId: string, itemId: string) {
   let api = getAPIContext();
 
   if (shouldRefreshToken()) {
@@ -824,17 +846,17 @@ export async function editMySQLSettings(orderId: string, itemId: string) {
   }
 
   // Проверяем статус кластера перед выполнением операции
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
 
   // Получаем текущую конфигурацию кластера
   const orderDetailResponse = await api.get(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
   );
   
   const orderDetail = await orderDetailResponse.json();
   
   // Ищем managed item чтобы получить текущие настройки
-  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
   
   if (!managedItem) {
     throw new Error('Не найден managed item в заказе');
@@ -842,28 +864,43 @@ export async function editMySQLSettings(orderId: string, itemId: string) {
 
   // Извлекаем текущие значения из конфигурации кластера
   const currentClusterDescription = managedItem.data.config.service?.description;
-  const currentMysqlVersion = managedItem.data.config.mysql_version;
-  const currentSettings = managedItem.data.config.settings?.mysqld || {};
-  const currentMaxConnections = currentSettings.max_user_connections;
+  const currentRedisVersion = managedItem.data.config.redis_version;
+  const currentSettings = managedItem.data.config.service?.settings || {};
+  const currentTimeout = currentSettings.timeout;
+  const currentAof = managedItem.data.config.service?.aof || {};
+  const currentRdb = managedItem.data.config.service?.rdb || {};
+  const currentAutoBackup = managedItem.data.config.service?.backup || {};
 
-  console.log('Текущее значение max_user_connections:', currentMaxConnections);
+  console.log('Текущее значение timeout:', currentTimeout);
+  console.log('Текущие настройки AOF:', currentAof);
+  console.log('Текущие настройки RDB:', currentRdb);
+  console.log('Текущие настройки авто-бэкапа:', currentAutoBackup);
 
   // Генерируем новые настройки
-  let newMaxUserConnections = Math.floor(Math.random() * 900) + 100; // от 100 до 1000
+  let newTimeout = Math.floor(Math.random() * 200) + 300; // от 300 до 500
 
   // Проверяем что новое значение отличается от текущего
-  if (currentMaxConnections === newMaxUserConnections) {
-    console.log(`Текущее значение ${currentMaxConnections} совпадает с новым, выбираем другое значение`);
-    // Выбираем другое значение
-    const alternativeConnections = [150, 200, 300, 500, 800];
-    const availableOptions = alternativeConnections.filter(val => val !== currentMaxConnections);
+  if (currentTimeout === newTimeout) {
+    console.log(`Текущее значение ${currentTimeout} совпадает с новым, выбираем другое значение`);
+    const alternativeTimeouts = [350, 400, 450, 500];
+    const availableOptions = alternativeTimeouts.filter(val => val !== currentTimeout);
     if (availableOptions.length === 0) {
-      throw new Error('Нет доступных значений для изменения max_user_connections');
+      throw new Error('Нет доступных значений для изменения timeout');
     }
-    newMaxUserConnections = availableOptions[Math.floor(Math.random() * availableOptions.length)];
+    newTimeout = availableOptions[Math.floor(Math.random() * availableOptions.length)];
   }
 
-  console.log(`Устанавливаем max_user_connections: ${newMaxUserConnections}`);
+  // Меняем настройки авто-бэкапа
+  const newBackupSchedule = currentAutoBackup.schedule_time === '00:00:00' ? '00:30:00' : '00:00:00';
+  const newBackupRetention = currentAutoBackup.retention_number === 7 ? 5 : 7;
+
+  // Меняем настройки RDB (включаем/выключаем)
+  const newRdbEnabled = !currentRdb.enabled;
+
+  console.log(`Устанавливаем timeout: ${newTimeout}`);
+  console.log(`Устанавливаем schedule_time: ${newBackupSchedule}`);
+  console.log(`Устанавливаем retention_number: ${newBackupRetention}`);
+  console.log(`Устанавливаем RDB enabled: ${newRdbEnabled}`);
 
   // Изменяем настройки кластера
   const changeSettingsPayload = {
@@ -872,17 +909,37 @@ export async function editMySQLSettings(orderId: string, itemId: string) {
     item_id: itemId,
     order: {
       attrs: {
-        cluster_description: currentClusterDescription,
-        mysql_version: currentMysqlVersion,
+        aof: {
+          fsync: currentAof.fsync || 'everysec',
+          enabled: currentAof.enabled !== undefined ? currentAof.enabled : true
+        },
+        rdb: {
+          save: currentRdb.save || '300 10',
+          enabled: newRdbEnabled,
+          compression: currentRdb.compression !== undefined ? currentRdb.compression : true
+        },
         parameters: {
-          max_user_connections: newMaxUserConnections
+          timeout: newTimeout,
+          "tcp-backlog": currentSettings["tcp-backlog"] || 511,
+          "tcp-keepalive": currentSettings["tcp-keepalive"] || 300,
+          "maxmemory-policy": currentSettings["maxmemory-policy"] || 'noeviction'
+        },
+        auto_backup: {
+          enabled: currentAutoBackup.enabled !== undefined ? currentAutoBackup.enabled : true,
+          schedule_time: newBackupSchedule,
+          retention_number: newBackupRetention
+        },
+        redis_version: currentRedisVersion,
+        maintance_window: managedItem.data.config.maintance_window || {
+          day: 0,
+          time_range: "00:00 - 01:00"
         }
       }
     }
   };
 
   const changeSettingsResponse = await api.patch(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/edit_mysql_vm_settings`,
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/edit_redis_vm_settings`,
     { data: changeSettingsPayload }
   );
 
@@ -915,7 +972,7 @@ export async function editMySQLSettings(orderId: string, itemId: string) {
 
     try {
       const statusResponse = await api.get(
-        `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
       );
 
       const statusData = await statusResponse.json();
@@ -924,21 +981,30 @@ export async function editMySQLSettings(orderId: string, itemId: string) {
       console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
 
       // Проверяем что настройки изменились в конфигурации
-      const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
+      const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
       
       if (currentManagedItem) {
-        const updatedSettings = currentManagedItem.data.config.settings?.mysqld || {};
-        const updatedMaxConnections = updatedSettings.max_user_connections;
+        const updatedSettings = currentManagedItem.data.config.service?.settings || {};
+        const updatedTimeout = updatedSettings.timeout;
+        const updatedRdb = currentManagedItem.data.config.service?.rdb || {};
+        const updatedAutoBackup = currentManagedItem.data.config.service?.backup || {};
         
-        if (updatedMaxConnections === newMaxUserConnections) {
+        if (updatedTimeout === newTimeout && 
+            updatedRdb.enabled === newRdbEnabled &&
+            updatedAutoBackup.schedule_time === newBackupSchedule &&
+            updatedAutoBackup.retention_number === newBackupRetention) {
+          
           isCompleted = true;
           console.log('Настройки успешно изменены');
           
           // Финальная проверка
-          console.log('Финальное значение max_user_connections:', updatedMaxConnections);
+          console.log('Финальное значение timeout:', updatedTimeout);
+          console.log('Финальное значение RDB enabled:', updatedRdb.enabled);
+          console.log('Финальное значение schedule_time:', updatedAutoBackup.schedule_time);
+          console.log('Финальное значение retention_number:', updatedAutoBackup.retention_number);
           
-          if (updatedMaxConnections !== newMaxUserConnections) {
-            throw new Error(`Ожидалось значение ${newMaxUserConnections}, но получено ${updatedMaxConnections}`);
+          if (updatedTimeout !== newTimeout) {
+            throw new Error(`Ожидалось значение timeout ${newTimeout}, но получено ${updatedTimeout}`);
           }
           
           break;
@@ -978,156 +1044,17 @@ export async function editMySQLSettings(orderId: string, itemId: string) {
 
   // Финальная проверка статуса кластера после изменения настроек
   console.log('Проверяем статус кластера после изменения настроек...');
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
 
-  return newMaxUserConnections; // Возвращаем новое значение для информации
-}
-
-export async function addMySQLNode(orderId: string, itemId: string) {
-  let api = getAPIContext();
-
-  if (shouldRefreshToken()) {
-    console.log('Обновляем токен перед запросом...');
-    await refreshAPIContext();
-    api = getAPIContext();
-  }
-
-  // Проверяем статус кластера перед выполнением операции
-  await checkClusterStatus(api, PROJECT_ID, orderId, itemId);
-
-  console.log('Добавляем новую ноду в MySQL реплику');
-
-  // Получаем текущую конфигурацию чтобы узнать количество нод
-  const orderDetailResponse = await api.get(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
-  );
-  
-  const orderDetail = await orderDetailResponse.json();
-  
-  // Ищем managed item
-  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
-  
-  if (!managedItem) {
-    throw new Error('Не найден managed item в заказе');
-  }
-
-  const currentNodes = managedItem.data.config.number_of_vms;
-  console.log(`Текущее количество нод: ${currentNodes}`);
-
-  // Определяем количество нод для добавления (можно добавить 1 или 2 ноды)
-  const nodesToAdd = 2; 
-
-  const addNodePayload = {
-    project_name: PROJECT_ID,
-    id: orderId,
-    item_id: itemId,
-    order: {
-      attrs: {
-        quantity: nodesToAdd  
-      }
-    }
+  return {
+    timeout: newTimeout,
+    rdbEnabled: newRdbEnabled,
+    backupSchedule: newBackupSchedule,
+    backupRetention: newBackupRetention
   };
-
-  const addNodeResponse = await api.patch(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/add_vm_to_mysql`, 
-    { data: addNodePayload }
-  );
-
-  console.log('Статус ответа на добавление ноды:', addNodeResponse.status());
-
-  if (addNodeResponse.status() !== 200) {
-    const errorBody = await addNodeResponse.text();
-    throw new Error(`Ожидался статус 200, но получен ${addNodeResponse.status()}: ${errorBody}`);
-  }
-
-  const responseData = await addNodeResponse.json();
-  console.log('Запрос на добавление ноды отправлен успешно');
-  console.log('ID заказа после добавления ноды:', responseData.id);
-
-  // Ждем завершения операции
-  console.log(`Ждем завершения операции добавления ${nodesToAdd} нод...`);
-
-  const startTime = Date.now();
-  const maxWaitTime = 20 * 60 * 1000;
-  let isCompleted = false;
-  let retryCount = 0;
-  const maxRetries = 3;
-
-  while (!isCompleted && Date.now() - startTime < maxWaitTime) {
-    await new Promise((resolve) => setTimeout(resolve, 60000));
-
-    if (shouldRefreshToken()) {
-      console.log('Обновляем токен...');
-      await refreshAPIContext();
-      api = getAPIContext();
-    }
-
-    try {
-      const statusResponse = await api.get(
-        `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
-      );
-
-      const statusData = await statusResponse.json();
-      
-      const minutesPassed = Math.round((Date.now() - startTime) / 60000);
-      console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
-
-      // Проверяем что количество нод увеличилось
-      const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'mysql_vm');
-      
-      if (currentManagedItem) {
-        const updatedNodes = currentManagedItem.data.config.number_of_vms;
-        const expectedNodes = currentNodes + nodesToAdd;
-        
-        console.log(`Текущее количество нод: ${updatedNodes}, ожидаемое: ${expectedNodes}`);
-        
-        if (updatedNodes === expectedNodes) {
-          isCompleted = true;
-          console.log(`Количество нод увеличено с ${currentNodes} до ${updatedNodes}`);
-          break;
-        } else if (updatedNodes > currentNodes) {
-          console.log(`Количество нод изменилось с ${currentNodes} до ${updatedNodes}, но не соответствует ожидаемому ${expectedNodes}`);
-        }
-      }
-
-      // Проверяем статус заказа
-      if (statusData.status === 'success' && isCompleted) {
-        console.log('Заказ завершен успешно');
-        break;
-      } else if (statusData.status === 'error') {
-        throw new Error('Операция добавления ноды завершилась ошибкой');
-      }
-
-      // Сбрасываем счетчик ретраев при успешном запросе
-      retryCount = 0;
-
-    } catch (error) {
-      // Обрабатываем сетевые ошибки
-      retryCount++;
-      console.log(`Сетевая ошибка (попытка ${retryCount}/${maxRetries}):`, String(error));
-      
-      if (retryCount >= maxRetries) {
-        throw new Error('Превышено количество попыток из-за сетевых ошибок');
-      }
-      
-      console.log('Повторная попытка через 10 секунд...');
-      await new Promise((resolve) => setTimeout(resolve, 10000));
-      
-      // Пробуем обновить контекст API при сетевых ошибках
-      await refreshAPIContext();
-      api = getAPIContext();
-    }
-  }
-
-  if (!isCompleted) {
-    throw new Error(`Добавление ${nodesToAdd} нод не завершилось за отведенное время`);
-  }
-
-  console.log(`Операция добавления ${nodesToAdd} нод завершена успешно!`);
-  return nodesToAdd; // Возвращаем количество добавленных нод
 }
 
-export async function deleteMySQLCluster(orderId: string, itemId: string, clusterName: string) {
+export async function deleteCluster(orderId: string, itemId: string, clusterName: string) {
   let api = getAPIContext();
 
   if (shouldRefreshToken()) {
@@ -1149,7 +1076,7 @@ export async function deleteMySQLCluster(orderId: string, itemId: string, cluste
   };
 
   const deleteResponse = await api.patch(
-    `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/delete_cluster_for_mysql`,
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/delete_cluster_for_redis`,
     { data: deleteClusterPayload }
   );
 
@@ -1182,7 +1109,7 @@ export async function deleteMySQLCluster(orderId: string, itemId: string, cluste
 
     try {
       const statusResponse = await api.get(
-        `/mysql-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
       );
 
       const statusData = await statusResponse.json();

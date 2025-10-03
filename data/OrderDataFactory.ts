@@ -1,6 +1,7 @@
 import { RedisStandaloneData } from './Redis/RedisStandaloneData';
 import { RedisSentinelData } from './Redis/RedisSentinelData';
 import { MySQLStandaloneData } from './MySQL/MySQLStandaloneData';
+import { MySQLReplicaData } from './MySQL/MySQLReplicaData';
 import { OrderData } from './OrderData';
 
 export type ProductType = 
@@ -23,7 +24,9 @@ export class OrderDataFactory {
         return new RedisSentinelData();
       // MySQL
       case 'mysql-standalone':
-        return new MySQLStandaloneData();  
+        return new MySQLStandaloneData(); 
+      case 'mysql-replica':
+        return new MySQLReplicaData();  
       // Можно добавить остальные продукты по мере необходимости
       default:
         throw new Error(`Unsupported product type: ${productType}`);

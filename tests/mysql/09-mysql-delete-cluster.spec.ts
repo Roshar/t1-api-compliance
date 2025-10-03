@@ -18,16 +18,16 @@ test.afterAll(async () => {
 test('Удаление MySQL кластера', async () => {
   test.setTimeout(30 * 60 * 1000);
 
-  if (!testData.mysqlCluster) {
+  if (!testData.cluster) {
     console.log('Нет данных кластера для удаления, пропускаем тест');
     test.skip();
     return;
   }
 
-  const { orderId, itemId, clusterName } = testData.mysqlCluster;
+  const { orderId, itemId, clusterName } = testData.cluster;
   await deleteMySQLCluster(orderId, itemId, clusterName);
   
   // Очищаем данные из testData после удаления (в тесте, а не в функции)
-  testData.mysqlCluster = null;
+  testData.cluster = null;
   console.log('Данные кластера очищены из testData');
 });

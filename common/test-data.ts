@@ -12,5 +12,6 @@ export interface CreatedCluster {
 }
 
 export const testData = {
-  mysqlCluster: null as CreatedCluster | null
+  //mysqlCluster: null as CreatedCluster | null
+  cluster: null as CreatedCluster | null
 };

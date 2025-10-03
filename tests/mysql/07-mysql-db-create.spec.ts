@@ -18,13 +18,13 @@ test.afterAll(async () => {
 test('Создание базы данных в MySQL', async () => {
   test.setTimeout(10 * 60 * 1000);
 
-  if (!testData.mysqlCluster) {
+  if (!testData.cluster) {
     console.log('Кластер не создан, пропускаем тест');
     test.skip();
     return;
   }
 
-  const { orderId, itemId, clusterName } = testData.mysqlCluster;
+  const { orderId, itemId, clusterName } = testData.cluster;
   const dbName = await createMySQLDatabase(orderId, itemId, clusterName);
   console.log(`База данных ${dbName} успешно создана`);
 });

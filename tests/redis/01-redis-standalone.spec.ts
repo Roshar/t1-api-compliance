@@ -1,7 +1,7 @@
 import { test } from '@playwright/test';
 import 'dotenv/config';
 import { setupAPIContext, disposeAPIContext } from '../../common/api-context';
-import { createMySQLCluster } from '../../common/mysql-operations';
+import { createCluster } from '../../common/redis-operations';
 import { testData } from '../../common/test-data';
 
 test.beforeAll(async () => {
@@ -12,8 +12,8 @@ test.afterAll(async () => {
   await disposeAPIContext();
 });
 
-test('Создание MySQL standalone кластера', async () => {
-  const clusterData = await createMySQLCluster();
+test('Создание Redis standalone кластера', async () => {
+  const clusterData = await createCluster();
   // Сохраняем в testData для других тестов
   testData.cluster = clusterData;
 });

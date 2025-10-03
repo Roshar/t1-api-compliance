@@ -18,13 +18,13 @@ test.afterAll(async () => {
 test('Изменение настроек MySQL кластера', async () => {
   test.setTimeout(20 * 60 * 1000);
 
-  if (!testData.mysqlCluster) {
+  if (!testData.cluster) {
     console.log('Кластер не создан, пропускаем тест');
     test.skip();
     return;
   }
 
-  const { orderId, itemId } = testData.mysqlCluster;
+  const { orderId, itemId } = testData.cluster;
   const newMaxConnections = await editMySQLSettings(orderId, itemId);
   console.log(`Настройки успешно изменены, max_user_connections = ${newMaxConnections}`);
 });
