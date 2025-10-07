@@ -1,7 +1,7 @@
 import { test } from '@playwright/test';
 import 'dotenv/config';
 import { setupAPIContext, disposeAPIContext } from '../../common/api-context';
-import { createCluster, deleteCluster, addRedisNode} from '../../common/redis-operations';
+import { createCluster, deleteCluster, addRedisNode, removeRedisNodes} from '../../common/redis-operations';
 import { runCommonRedisOperations} from './redis-collection-shared';
 
 
@@ -24,7 +24,10 @@ test.describe.serial('Redis full collection for sentinel', () => {
 
       console.log('\n Добавление ноды в кластер ---');
       await addRedisNode(clusterData.orderId, clusterData.itemId);
-      
+
+      console.log('\n Удаление ноды в кластере ---');
+      await removeRedisNodes(clusterData.orderId, clusterData.itemId)
+
       await deleteCluster(clusterData.orderId, clusterData.itemId, clusterData.clusterName);
      
     }catch (error) {

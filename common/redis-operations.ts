@@ -1054,6 +1054,679 @@ export async function editSettings(orderId: string, itemId: string) {
   };
 }
 
+export async function disableAutoBackup(orderId: string, itemId: string) {
+  let api = getAPIContext();
+
+  if (shouldRefreshToken()) {
+    console.log('Обновляем токен перед запросом...');
+    await refreshAPIContext();
+    api = getAPIContext();
+  }
+
+  // Проверяем статус кластера перед выполнением операции
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
+
+  // Получаем текущую конфигурацию кластера
+  const orderDetailResponse = await api.get(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+  );
+  
+  const orderDetail = await orderDetailResponse.json();
+  
+  // Ищем managed item чтобы получить текущие настройки
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
+  
+  if (!managedItem) {
+    throw new Error('Не найден managed item в заказе');
+  }
+
+  // Извлекаем текущие значения из конфигурации кластера
+  const currentRedisVersion = managedItem.data.config.redis_version;
+  const currentSettings = managedItem.data.config.service?.settings || {};
+  const currentAof = managedItem.data.config.service?.aof || {};
+  const currentRdb = managedItem.data.config.service?.rdb || {};
+  const currentAutoBackup = managedItem.data.config.service?.backup || {};
+
+  console.log('Текущие настройки авто-бэкапа:', currentAutoBackup);
+
+  // Проверяем текущее состояние авто-бэкапа
+  if (currentAutoBackup.enabled === false) {
+    console.log('Автоматическое резервное копирование уже отключено');
+    return { backupEnabled: false };
+  }
+
+  console.log('Отключаем автоматическое резервное копирование...');
+
+  // Отключаем автоматическое резервное копирование
+  const disableBackupPayload = {
+    project_name: PROJECT_ID,
+    id: orderId,
+    item_id: itemId,
+  
+    order: {
+      attrs: {
+        aof: {
+          fsync: currentAof.fsync || 'everysec',
+          enabled: currentAof.enabled !== undefined ? currentAof.enabled : true
+        },
+        rdb: {
+          save: currentRdb.save || '300 10',
+          enabled: currentRdb.enabled !== undefined ? currentRdb.enabled : true,
+          compression: currentRdb.compression !== undefined ? currentRdb.compression : true
+        },
+        parameters: {
+          timeout: currentSettings.timeout || 300,
+          "tcp-backlog": currentSettings["tcp-backlog"] || 511,
+          "tcp-keepalive": currentSettings["tcp-keepalive"] || 300,
+          "maxmemory-policy": currentSettings["maxmemory-policy"] || 'noeviction'
+        },
+        auto_backup: {
+          enabled: false, // Отключаем авто-бэкап
+          schedule_time: currentAutoBackup.schedule_time || '00:00:00',
+          retention_number: currentAutoBackup.retention_number || 7
+        },
+        redis_version: currentRedisVersion,
+        maintance_window: managedItem.data.config.maintance_window || {
+          day: 0,
+          time_range: "00:00 - 01:00"
+        }
+      }
+    }
+  };
+
+  const disableBackupResponse = await api.patch(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/edit_redis_vm_settings`,
+    { data: disableBackupPayload }
+  );
+
+  console.log('Статус ответа на отключение авто-бэкапа:', disableBackupResponse.status());
+
+  if (disableBackupResponse.status() !== 200) {
+    const errorBody = await disableBackupResponse.text();
+    throw new Error(`Ожидался статус 200, но получен ${disableBackupResponse.status()}: ${errorBody}`);
+  }
+
+  console.log('Запрос на отключение авто-бэкапа отправлен успешно');
+
+  // Ждем завершения операции
+  console.log('Ждем завершения операции отключения авто-бэкапа...');
+
+  const startTime = Date.now();
+  const maxWaitTime = 15 * 60 * 1000;
+  let isCompleted = false;
+  let retryCount = 0;
+  const maxRetries = 3;
+
+  while (!isCompleted && Date.now() - startTime < maxWaitTime) {
+    await new Promise((resolve) => setTimeout(resolve, 60000));
+
+    if (shouldRefreshToken()) {
+      console.log('Обновляем токен...');
+      await refreshAPIContext();
+      api = getAPIContext();
+    }
+
+    try {
+      const statusResponse = await api.get(
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+      );
+
+      const statusData = await statusResponse.json();
+      
+      const minutesPassed = Math.round((Date.now() - startTime) / 60000);
+      console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
+
+      // Проверяем что авто-бэкап отключен в конфигурации
+      const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
+      
+      if (currentManagedItem) {
+        const updatedAutoBackup = currentManagedItem.data.config.service?.backup || {};
+        
+        if (updatedAutoBackup.enabled === false) {
+          isCompleted = true;
+          console.log('Автоматическое резервное копирование успешно отключено');
+          
+          // Финальная проверка
+          console.log('Финальное значение backup enabled:', updatedAutoBackup.enabled);
+          
+          if (updatedAutoBackup.enabled !== false) {
+            throw new Error('Авто-бэкап не был отключен');
+          }
+          
+          break;
+        }
+      }
+
+      if (statusData.status === 'error') {
+        throw new Error('Операция отключения авто-бэкапа завершилась ошибкой');
+      }
+
+      // Сбрасываем счетчик ретраев при успешном запросе
+      retryCount = 0;
+
+    } catch (error) {
+      // Обрабатываем сетевые ошибки
+      retryCount++;
+      console.log(`Сетевая ошибка (попытка ${retryCount}/${maxRetries}):`, String(error));
+      
+      if (retryCount >= maxRetries) {
+        throw new Error('Превышено количество попыток из-за сетевых ошибок');
+      }
+      
+      console.log('Повторная попытка через 10 секунд...');
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+      
+      // Пробуем обновить контекст API при сетевых ошибках
+      await refreshAPIContext();
+      api = getAPIContext();
+    }
+  }
+
+  if (!isCompleted) {
+    throw new Error('Отключение авто-бэкапа не завершилось за отведенное время');
+  }
+
+  console.log('Операция отключения авто-бэкапа завершена успешно!');
+
+  // Финальная проверка статуса кластера после изменения настроек
+  console.log('Проверяем статус кластера после отключения авто-бэкапа...');
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
+
+  return { backupEnabled: false };
+}
+
+export async function addRedisNode(
+  orderId: string, 
+  itemId: string, 
+  nodesToAdd: number = 2 // по умолчанию оставляем 2 для сентинела, для кластера укажем 4
+) {
+  let api = getAPIContext();
+
+  if (shouldRefreshToken()) {
+    console.log('Обновляем токен перед запросом...');
+    await refreshAPIContext();
+    api = getAPIContext();
+  }
+
+  // Проверяем статус кластера перед выполнением операции
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
+
+  // Получаем текущую конфигурацию чтобы узнать количество нод
+  const orderDetailResponse = await api.get(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+  );
+  
+  const orderDetail = await orderDetailResponse.json();
+  
+  // Ищем managed item для Redis
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
+  
+  if (!managedItem) {
+    throw new Error('Не найден managed item для Redis в заказе');
+  }
+
+  const currentNodes = managedItem.data.config.number_of_vms;
+  const serviceType = managedItem.data.config.service?.service_type || managedItem.data.config.service_type;
+  
+  console.log(`Текущее количество нод: ${currentNodes}`);
+  console.log(`Тип сервиса: ${serviceType}`);
+
+  const addNodePayload = {
+    project_name: PROJECT_ID,
+    id: orderId,
+    item_id: itemId,
+    order: {
+      attrs: {
+        quantity: nodesToAdd  
+      }
+    }
+  };
+
+  const addNodeResponse = await api.patch(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/add_vm_to_redis`, 
+    { data: addNodePayload }
+  );
+
+  console.log('Статус ответа на добавление ноды:', addNodeResponse.status());
+
+  if (addNodeResponse.status() !== 200) {
+    const errorBody = await addNodeResponse.text();
+    throw new Error(`Ожидался статус 200, но получен ${addNodeResponse.status()}: ${errorBody}`);
+  }
+
+  const responseData = await addNodeResponse.json();
+  console.log('Запрос на добавление ноды отправлен успешно');
+  console.log('ID заказа после добавления ноды:', responseData.id);
+
+  // Ждем завершения операции
+  console.log(`Ждем завершения операции добавления ${nodesToAdd} нод...`);
+
+  const startTime = Date.now();
+  const maxWaitTime = 20 * 60 * 1000;
+  let isCompleted = false;
+  let retryCount = 0;
+  const maxRetries = 3;
+
+  while (!isCompleted && Date.now() - startTime < maxWaitTime) {
+    await new Promise((resolve) => setTimeout(resolve, 60000));
+
+    if (shouldRefreshToken()) {
+      console.log('Обновляем токен...');
+      await refreshAPIContext();
+      api = getAPIContext();
+    }
+
+    try {
+      const statusResponse = await api.get(
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+      );
+
+      const statusData = await statusResponse.json();
+      
+      const minutesPassed = Math.round((Date.now() - startTime) / 60000);
+      console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
+
+      // Проверяем что количество нод увеличилось
+      const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
+      
+      if (currentManagedItem) {
+        const updatedNodes = currentManagedItem.data.config.number_of_vms;
+        const expectedNodes = currentNodes + nodesToAdd;
+        
+        console.log(`Текущее количество нод: ${updatedNodes}, ожидаемое: ${expectedNodes}`);
+        
+        if (updatedNodes === expectedNodes) {
+          isCompleted = true;
+          console.log(`Количество нод увеличено с ${currentNodes} до ${updatedNodes}`);
+          
+          // Дополнительная проверка - убеждаемся что заказ завершился успешно
+          if (statusData.status === 'success') {
+            console.log('Заказ завершен успешно');
+            break;
+          }
+        } else if (updatedNodes > currentNodes) {
+          console.log(`Количество нод изменилось с ${currentNodes} до ${updatedNodes}, но не соответствует ожидаемому ${expectedNodes}`);
+        }
+      }
+
+      // Проверяем статус заказа
+      if (statusData.status === 'success' && isCompleted) {
+        console.log('Заказ завершен успешно');
+        break;
+      } else if (statusData.status === 'error') {
+        throw new Error('Операция добавления ноды завершилась ошибкой');
+      }
+
+      // Сбрасываем счетчик ретраев при успешном запросе
+      retryCount = 0;
+
+    } catch (error) {
+      // Обрабатываем сетевые ошибки
+      retryCount++;
+      console.log(`Сетевая ошибка (попытка ${retryCount}/${maxRetries}):`, String(error));
+      
+      if (retryCount >= maxRetries) {
+        throw new Error('Превышено количество попыток из-за сетевых ошибок');
+      }
+      
+      console.log('Повторная попытка через 10 секунд...');
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+      
+      // Пробуем обновить контекст API при сетевых ошибках
+      await refreshAPIContext();
+      api = getAPIContext();
+    }
+  }
+
+  if (!isCompleted) {
+    throw new Error(`Добавление ${nodesToAdd} нод не завершилось за отведенное время`);
+  }
+
+  console.log(`Операция добавления ${nodesToAdd} нод завершена успешно!`);
+  return nodesToAdd; // Возвращаем количество добавленных нод
+}
+
+// !! Актуально только для редис кластеров
+export async function removeRedisNodes(
+  orderId: string, 
+  itemId: string, 
+  nodesToRemove: number = 2
+) {
+  let api = getAPIContext();
+
+  if (shouldRefreshToken()) {
+    console.log('Обновляем токен перед запросом...');
+    await refreshAPIContext();
+    api = getAPIContext();
+  }
+
+  // Проверяем статус кластера перед выполнением операции
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
+
+  // Получаем текущую конфигурацию чтобы узнать количество нод и список серверов
+  const orderDetailResponse = await api.get(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+  );
+  
+  const orderDetail = await orderDetailResponse.json();
+  
+  // Ищем managed item для Redis
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
+  
+  if (!managedItem) {
+    throw new Error('Не найден managed item для Redis в заказе');
+  }
+
+  const currentNodes = managedItem.data.config.number_of_vms;
+  const serviceType = managedItem.data.config.service?.service_type || managedItem.data.config.service_type;
+  
+  console.log(`Текущее количество нод: ${currentNodes}`);
+  console.log(`Тип сервиса: ${serviceType}`);
+
+  // Проверяем что после удаления останется достаточно нод
+  const minNodesRequired = 3;
+  const expectedNodesAfterRemoval = currentNodes - nodesToRemove;
+  
+  if (expectedNodesAfterRemoval < minNodesRequired) {
+    throw new Error(`Нельзя удалить ${nodesToRemove} нод. После удаления останется ${expectedNodesAfterRemoval} нод, минимально требуется ${minNodesRequired}`);
+  }
+
+  // Получаем список серверов для удаления (берем последние добавленные ноды)
+  const servers = managedItem.data.config.service?.servers || [];
+  console.log(`Всего серверов в конфигурации: ${servers.length}`);
+  
+  // Берем последние nodesToRemove серверов для удаления
+  const serversToRemove = servers.slice(-nodesToRemove);
+  const serverIdsToRemove = serversToRemove.map((server: any) => server.name);
+  
+  console.log(`Серверы для удаления: ${serverIdsToRemove.join(', ')}`);
+
+  const removeNodesPayload = {
+    project_name: PROJECT_ID,
+    id: orderId,
+    item_id: itemId,
+    order: {
+      attrs: {
+        item_id: serverIdsToRemove
+      }
+    }
+  };
+
+  console.log('Отправляем запрос на удаление нод:', JSON.stringify(removeNodesPayload, null, 2));
+
+  const removeNodesResponse = await api.patch(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/delete_several_vms_mongo`, 
+    { data: removeNodesPayload }
+  );
+
+  console.log('Статус ответа на удаление нод:', removeNodesResponse.status());
+
+  if (removeNodesResponse.status() !== 200) {
+    const errorBody = await removeNodesResponse.text();
+    throw new Error(`Ожидался статус 200, но получен ${removeNodesResponse.status()}: ${errorBody}`);
+  }
+
+  const responseData = await removeNodesResponse.json();
+  console.log('Запрос на удаление нод отправлен успешно');
+  console.log('ID заказа после удаления нод:', responseData.id);
+
+  // Ждем завершения операции
+  console.log(`Ждем завершения операции удаления ${nodesToRemove} нод...`);
+
+  const startTime = Date.now();
+  const maxWaitTime = 20 * 60 * 1000;
+  let isCompleted = false;
+  let retryCount = 0;
+  const maxRetries = 3;
+
+  while (!isCompleted && Date.now() - startTime < maxWaitTime) {
+    await new Promise((resolve) => setTimeout(resolve, 60000));
+
+    if (shouldRefreshToken()) {
+      console.log('Обновляем токен...');
+      await refreshAPIContext();
+      api = getAPIContext();
+    }
+
+    try {
+      const statusResponse = await api.get(
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+      );
+
+      const statusData = await statusResponse.json();
+      
+      const minutesPassed = Math.round((Date.now() - startTime) / 60000);
+      console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
+
+      // Проверяем что количество нод уменьшилось
+      const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
+      
+      if (currentManagedItem) {
+        const updatedNodes = currentManagedItem.data.config.number_of_vms;
+        const expectedNodes = currentNodes - nodesToRemove;
+        
+        console.log(`Текущее количество нод: ${updatedNodes}, ожидаемое: ${expectedNodes}`);
+        
+        if (updatedNodes === expectedNodes) {
+          isCompleted = true;
+          console.log(`Количество нод уменьшено с ${currentNodes} до ${updatedNodes}`);
+          
+          // Дополнительная проверка - убеждаемся что заказ завершился успешно
+          if (statusData.status === 'success') {
+            console.log('Заказ завершен успешно');
+            break;
+          }
+        } else if (updatedNodes < currentNodes) {
+          console.log(`Количество нод изменилось с ${currentNodes} до ${updatedNodes}, но не соответствует ожидаемому ${expectedNodes}`);
+        }
+      }
+
+      // Проверяем статус заказа
+      if (statusData.status === 'success' && isCompleted) {
+        console.log('Заказ завершен успешно');
+        break;
+      } else if (statusData.status === 'error') {
+        throw new Error('Операция удаления нод завершилась ошибкой');
+      }
+
+      // Сбрасываем счетчик ретраев при успешном запросе
+      retryCount = 0;
+
+    } catch (error) {
+      // Обрабатываем сетевые ошибки
+      retryCount++;
+      console.log(`Сетевая ошибка (попытка ${retryCount}/${maxRetries}):`, String(error));
+      
+      if (retryCount >= maxRetries) {
+        throw new Error('Превышено количество попыток из-за сетевых ошибок');
+      }
+      
+      console.log('Повторная попытка через 10 секунд...');
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+      
+      // Пробуем обновить контекст API при сетевых ошибках
+      await refreshAPIContext();
+      api = getAPIContext();
+    }
+  }
+
+  if (!isCompleted) {
+    throw new Error(`Удаление ${nodesToRemove} нод не завершилось за отведенное время`);
+  }
+
+  console.log(`Операция удаления ${nodesToRemove} нод завершена успешно!`);
+  return nodesToRemove; // Возвращаем количество удаленных нод
+}
+
+export async function resizeFlavor(orderId: string, itemId: string) {
+  let api = getAPIContext();
+
+  if (shouldRefreshToken()) {
+    console.log('Обновляем токен перед запросом...');
+    await refreshAPIContext();
+    api = getAPIContext();
+  }
+
+  // Проверяем статус кластера перед выполнением операции
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
+
+  // Получаем текущую конфигурацию кластера
+  const orderDetailResponse = await api.get(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+  );
+  
+  const orderDetail = await orderDetailResponse.json();
+  
+  // Ищем managed item для Redis
+  const managedItem = orderDetail.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
+  
+  if (!managedItem) {
+    throw new Error('Не найден managed item для Redis в заказе');
+  }
+
+  // Получаем текущий flavor
+  const currentFlavor = managedItem.data.config.flavor;
+  console.log('Текущий flavor:', currentFlavor.name);
+  console.log('Текущие параметры:', `${currentFlavor.ram}MB RAM, ${currentFlavor.vcpus} vCPUs`);
+
+  // Проверяем, не совпадают ли уже целевые параметры
+  if (currentFlavor.ram === 8192 && currentFlavor.vcpus === 4) {
+    console.log('Кластер уже имеет целевые параметры (8192MB RAM, 4 vCPUs)');
+    return { ram: 8192, vcpus: 4 };
+  }
+
+  // Создаем новый flavor с обновленными параметрами
+  const newFlavor = {
+    ...currentFlavor,           // Копируем ВСЕ поля из currentFlavor
+    ram: 8192,                  // Перезаписываем только RAM
+    vcpus: 4,                   // Перезаписываем только vCPUs
+    // name НЕ перезаписываем - оставляем оригинальное имя
+    extra_specs: {
+      ...currentFlavor.extra_specs,  // Копируем ВСЕ extra_specs
+      // Дополнительные спецификации остаются прежними
+    }
+  };
+
+  console.log('Новый flavor:', newFlavor.name);
+  console.log('Новые параметры:', `${newFlavor.ram}MB RAM, ${newFlavor.vcpus} vCPUs`);
+
+  const resizePayload = {
+    project_name: PROJECT_ID,
+    id: orderId,
+    item_id: itemId,
+    order: {
+      attrs: {
+        flavor: newFlavor
+      }
+    }
+  };
+
+  console.log('Отправляем запрос на изменение CPU/RAM...');
+
+  const resizeResponse = await api.patch(
+    `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/actions/resize_flavor`,
+    { data: resizePayload }
+  );
+
+  console.log('Статус ответа на изменение CPU/RAM:', resizeResponse.status());
+
+  if (resizeResponse.status() !== 200) {
+    const errorBody = await resizeResponse.text();
+    throw new Error(`Ожидался статус 200, но получен ${resizeResponse.status()}: ${errorBody}`);
+  }
+
+  const responseData = await resizeResponse.json();
+  console.log('Запрос на изменение CPU/RAM отправлен успешно');
+
+  // Ждем завершения операции
+  console.log('Ждем завершения операции изменения CPU/RAM...');
+
+  const startTime = Date.now();
+  const maxWaitTime = 20 * 60 * 1000;
+  let isCompleted = false;
+  let retryCount = 0;
+  const maxRetries = 3;
+
+  while (!isCompleted && Date.now() - startTime < maxWaitTime) {
+    await new Promise((resolve) => setTimeout(resolve, 60000));
+
+    if (shouldRefreshToken()) {
+      console.log('Обновляем токен...');
+      await refreshAPIContext();
+      api = getAPIContext();
+    }
+
+    try {
+      const statusResponse = await api.get(
+        `/redis-manager/api/v1/projects/${PROJECT_ID}/order-service/orders/${orderId}?include=last_action&with_relations=true`
+      );
+
+      const statusData = await statusResponse.json();
+      
+      const minutesPassed = Math.round((Date.now() - startTime) / 60000);
+      console.log(`[${minutesPassed} мин] Статус заказа: ${statusData.status}`);
+
+      // Проверяем что flavor изменился в конфигурации
+      const currentManagedItem = statusData.data.find((item: any) => item.type === 'managed' && item.provider === 'redis_vm');
+      
+      if (currentManagedItem) {
+        const updatedFlavor = currentManagedItem.data.config.flavor;
+        console.log(`Текущие параметры: ${updatedFlavor.ram}MB RAM, ${updatedFlavor.vcpus} vCPUs`);
+        
+        if (updatedFlavor.ram === 8192 && updatedFlavor.vcpus === 4) {
+          isCompleted = true;
+          console.log('Параметры CPU/RAM успешно изменены');
+          
+          // Дополнительная проверка - убеждаемся что заказ завершился успешно
+          if (statusData.status === 'success') {
+            console.log('Заказ завершен успешно');
+            break;
+          }
+        }
+      }
+
+      // Проверяем статус заказа
+      if (statusData.status === 'success' && isCompleted) {
+        console.log('Заказ завершен успешно');
+        break;
+      } else if (statusData.status === 'error') {
+        throw new Error('Операция изменения CPU/RAM завершилась ошибкой');
+      }
+
+      // Сбрасываем счетчик ретраев при успешном запросе
+      retryCount = 0;
+
+    } catch (error) {
+      // Обрабатываем сетевые ошибки
+      retryCount++;
+      console.log(`Сетевая ошибка (попытка ${retryCount}/${maxRetries}):`, String(error));
+      
+      if (retryCount >= maxRetries) {
+        throw new Error('Превышено количество попыток из-за сетевых ошибок');
+      }
+      
+      console.log('Повторная попытка через 10 секунд...');
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+      
+      // Пробуем обновить контекст API при сетевых ошибках
+      await refreshAPIContext();
+      api = getAPIContext();
+    }
+  }
+
+  if (!isCompleted) {
+    throw new Error('Изменение CPU/RAM не завершилось за отведенное время');
+  }
+
+  console.log('Операция изменения CPU/RAM завершена успешно!');
+
+  // Финальная проверка статуса кластера после изменения
+  console.log('Проверяем статус кластера после изменения CPU/RAM...');
+  await checkClusterStatus(api, PROJECT_ID, orderId, itemId, 'redis');
+
+  return { ram: 8192, vcpus: 4 };
+}
+
 export async function deleteCluster(orderId: string, itemId: string, clusterName: string) {
   let api = getAPIContext();
 

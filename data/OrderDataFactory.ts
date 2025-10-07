@@ -1,7 +1,11 @@
 import { RedisStandaloneData } from './Redis/RedisStandaloneData';
 import { RedisSentinelData } from './Redis/RedisSentinelData';
+import { RedisClusterData } from './Redis/RedisClusterData';
 import { MySQLStandaloneData } from './MySQL/MySQLStandaloneData';
 import { MySQLReplicaData } from './MySQL/MySQLReplicaData';
+import { OpenSearchSingleNodeData } from './OpenSearch/OpenSearchSingleNodeData';
+import { OpenSearchClusterNodeData } from './OpenSearch/OpenSearchClusterNodeData';
+
 import { OrderData } from './OrderData';
 
 export type ProductType = 
@@ -22,11 +26,19 @@ export class OrderDataFactory {
         return new RedisStandaloneData();
       case 'redis-sentinel':
         return new RedisSentinelData();
+      case 'redis-cluster':
+        return new RedisClusterData();
       // MySQL
       case 'mysql-standalone':
         return new MySQLStandaloneData(); 
       case 'mysql-replica':
         return new MySQLReplicaData();  
+      // OpenSearch
+      case 'opensearch-single':
+        return new OpenSearchSingleNodeData(); 
+      case 'opensearch-cluster':
+        return new OpenSearchClusterNodeData(); 
+     
       // Можно добавить остальные продукты по мере необходимости
       default:
         throw new Error(`Unsupported product type: ${productType}`);

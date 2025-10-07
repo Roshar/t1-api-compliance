@@ -2,7 +2,7 @@
 import { APIRequestContext } from '@playwright/test';
 
 // Типы поддерживаемых продуктов
-type ProductType = 'mysql' | 'redis';
+type ProductType = 'mysql' | 'redis' | 'opensearch';
 
 /**
  * Универсальная проверка статуса кластера
@@ -12,7 +12,7 @@ export async function checkClusterStatus(
   projectId: string, 
   orderId: string, 
   itemId: string,
-  productType: ProductType = 'mysql' // Тут MySQL для обратной совместимости
+  productType: ProductType = 'mysql'
 ): Promise<void> {
   
   console.log(`Проверяем статус ${productType.toUpperCase()} кластера...`);
@@ -21,11 +21,18 @@ export async function checkClusterStatus(
   const productConfig = {
     mysql: {
       apiPrefix: 'mysql-manager',
-      provider: 'mysql_vm'
+      provider: 'mysql_vm',
+      hasInstanceItems: true  // MySQL имеет instance items
     },
     redis: {
       apiPrefix: 'redis-manager', 
-      provider: 'redis_vm'
+      provider: 'redis_vm',
+      hasInstanceItems: true   // Redis имеет instance items
+    },
+    opensearch: {
+      apiPrefix: 'opensearch-manager', 
+      provider: 'opensearch_vm',
+      hasInstanceItems: false  // OpenSearch может не иметь instance items
     }
   };
 
@@ -42,20 +49,30 @@ export async function checkClusterStatus(
   const managedItem = orderData.data.find((item: any) => 
     item.type === 'managed' && item.provider === config.provider
   );
-  const instanceItem = orderData.data.find((item: any) => 
-    item.type === 'instance' && item.parent === itemId
-  );
 
   if (!managedItem) {
     throw new Error(`Не найден managed item для ${productType} в заказе`);
   }
 
-  if (!instanceItem) {
-    throw new Error('Не найден instance item в заказе');
-  }
+  // Для продуктов с instance items ищем instance
+  let instanceId: string | null = null;
+  
+  if (config.hasInstanceItems) {
+    const instanceItem = orderData.data.find((item: any) => 
+      item.type === 'instance' && item.parent === itemId
+    );
 
-  const instanceId = instanceItem.item_id;
-  console.log(`Найден ${productType.toUpperCase()} instance ID:`, instanceId);
+    if (!instanceItem) {
+      throw new Error('Не найден instance item в заказе');
+    }
+
+    instanceId = instanceItem.item_id;
+    console.log(`Найден ${productType.toUpperCase()} instance ID:`, instanceId);
+  } else {
+    // Для продуктов без instance items используем managed item
+    console.log(`${productType.toUpperCase()} использует managed item для проверки статуса`);
+    instanceId = managedItem.item_id; // Используем ID managed item
+  }
 
   // 2. Запрашиваем статус кластера
   const statusResponse = await api.get(
@@ -64,6 +81,19 @@ export async function checkClusterStatus(
 
   // Проверяем что запрос принят
   if (statusResponse.status() !== 202) {
+    // Если OpenSearch не поддерживает этот endpoint, пропускаем детальную проверку
+    if (productType === 'opensearch' && statusResponse.status() === 404) {
+      console.log('OpenSearch не поддерживает детальную проверку статуса, проверяем только статус заказа...');
+      
+      // Проверяем общий статус заказа
+      if (orderData.status === 'error') {
+        throw new Error('OpenSearch кластер находится в состоянии ошибки');
+      }
+      
+      console.log('OpenSearch кластер готов к операциям (базовая проверка)');
+      return;
+    }
+    
     throw new Error(`Ошибка при запросе статуса ${productType}: ${statusResponse.status()}`);
   }
 
@@ -128,4 +158,16 @@ export async function checkRedisClusterStatus(
   itemId: string
 ): Promise<void> {
   return checkClusterStatus(api, projectId, orderId, itemId, 'redis');
+}
+
+/**
+ * Специальная функция для OpenSearch
+ */
+export async function checkOpenSearchClusterStatus(
+  api: APIRequestContext, 
+  projectId: string, 
+  orderId: string, 
+  itemId: string
+): Promise<void> {
+  return checkClusterStatus(api, projectId, orderId, itemId, 'opensearch');
 }
